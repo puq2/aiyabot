@@ -102,7 +102,7 @@ class GlobalVar:
     hires_upscaler_names = []
     save_outputs = "True"
     save_metadata = "True"
-    queue_limit = 1
+    queue_limit = 10
     prompt_ban_list = []
     prompt_ignore_list = []
     display_ignored_words = "False"
