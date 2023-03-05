@@ -185,7 +185,7 @@ async def parse_image_info(ctx, image_url, command):
         if command == 'slash':
             message = "\nIf you're copying from Discord and think there should be image info," \
                       " try **Copy Link** instead of **Copy Image**"
-        await ctx.respond(content=f"The image information is empty or unreadable!{message}", ephemeral=True)
+        await ctx.respond(content=f"The image information is empty or unreadable (meaning it doesn't have ai generated metadata).{message}", ephemeral=True)
 
 
 async def get_image_info(ctx, message: discord.Message):
