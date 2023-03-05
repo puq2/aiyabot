@@ -362,7 +362,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         # set up tuple of parameters to pass into the Discord view
         input_tuple = (
             ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
-            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition)
+            init_image, batch, styles, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition)
         view = viewhandler.DrawView(input_tuple)
         # setup the queue
         user_queue_limit = settings.queue_check(ctx.author)
@@ -700,7 +700,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         # set up tuple of parameters to pass into the Discord view
         input_tuple = (
             ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
-            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora)
+            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition)
         view = viewhandler.DrawView(input_tuple)
         # setup the queue
         user_queue_limit = settings.queue_check(ctx.author)

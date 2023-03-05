@@ -291,18 +291,15 @@ class DrawView(View):
     async def button_draw(self, button, interaction):
         try:
             # check if the output is from the person who requested it
-            if interaction.user.id == self.input_tuple[0].author.id:
-                # if there's room in the queue, open up the modal
-                user_queue_limit = settings.queue_check(interaction.user)
-                if queuehandler.GlobalQueue.dream_thread.is_alive():
-                    if user_queue_limit == "Stop":
-                        await interaction.response.send_message(content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.", ephemeral=True)
-                    else:
-                        await interaction.response.send_modal(DrawModal(self.input_tuple))
+            # if there's room in the queue, open up the modal
+            user_queue_limit = settings.queue_check(interaction.user)
+            if queuehandler.GlobalQueue.dream_thread.is_alive():
+                if user_queue_limit == "Stop":
+                    await interaction.response.send_message(content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.", ephemeral=True)
                 else:
                     await interaction.response.send_modal(DrawModal(self.input_tuple))
             else:
-                await interaction.response.send_message("You can't use other people's 🖋!", ephemeral=True)
+                await interaction.response.send_modal(DrawModal(self.input_tuple))
         except Exception as e:
             print('The pen button broke: ' + str(e))
             # if interaction fails, assume it's because aiya restarted (breaks buttons)
@@ -317,32 +314,29 @@ class DrawView(View):
     async def button_roll(self, button, interaction):
         try:
             # check if the output is from the person who requested it
-            if interaction.user.id == self.input_tuple[0].author.id:
-                # update the tuple with a new seed
-                new_seed = list(self.input_tuple)
-                new_seed[10] = random.randint(0, 0xFFFFFFFF)
-                seed_tuple = tuple(new_seed)
+            # update the tuple with a new seed
+            new_seed = list(self.input_tuple)
+            new_seed[10] = random.randint(0, 0xFFFFFFFF)
+            seed_tuple = tuple(new_seed)
 
-                print(f'Reroll -- {interaction.user.name}#{interaction.user.discriminator} -- Prompt: {seed_tuple[1]}')
+            print(f'Reroll -- {interaction.user.name}#{interaction.user.discriminator} -- Prompt: {seed_tuple[1]}')
 
-                # set up the draw dream and do queue code again for lack of a more elegant solution
-                draw_dream = stablecog.StableCog(self)
-                user_queue_limit = settings.queue_check(interaction.user)
-                if queuehandler.GlobalQueue.dream_thread.is_alive():
-                    if user_queue_limit == "Stop":
-                        await interaction.response.send_message(content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.", ephemeral=True)
-                    else:
-                        queuehandler.GlobalQueue.queue.append(queuehandler.DrawObject(stablecog.StableCog(self), *seed_tuple, DrawView(seed_tuple)))
+            # set up the draw dream and do queue code again for lack of a more elegant solution
+            draw_dream = stablecog.StableCog(self)
+            user_queue_limit = settings.queue_check(interaction.user)
+            if queuehandler.GlobalQueue.dream_thread.is_alive():
+                if user_queue_limit == "Stop":
+                    await interaction.response.send_message(content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.", ephemeral=True)
                 else:
-                    await queuehandler.process_dream(draw_dream, queuehandler.DrawObject(stablecog.StableCog(self), *seed_tuple, DrawView(seed_tuple)))
-
-                if user_queue_limit != "Stop":
-                    await interaction.response.send_message(
-                        f'<@{interaction.user.id}>, {settings.messages()}\nQueue: '
-                        f'``{len(queuehandler.GlobalQueue.queue)}`` - ``{seed_tuple[1]}``'
-                        f'\nNew Seed:``{seed_tuple[10]}``')
+                    queuehandler.GlobalQueue.queue.append(queuehandler.DrawObject(stablecog.StableCog(self), *seed_tuple, DrawView(seed_tuple)))
             else:
-                await interaction.response.send_message("You can't use other people's 🎲!", ephemeral=True)
+                await queuehandler.process_dream(draw_dream, queuehandler.DrawObject(stablecog.StableCog(self), *seed_tuple, DrawView(seed_tuple)))
+
+            if user_queue_limit != "Stop":
+                await interaction.response.send_message(
+                    f'<@{interaction.user.id}>, {settings.messages()}\nQueue: '
+                    f'``{len(queuehandler.GlobalQueue.queue)}`` - ``{seed_tuple[1]}``'
+                    f'\nNew Seed:``{seed_tuple[10]}``')
         except Exception as e:
             print('The dice roll button broke: ' + str(e))
             # if interaction fails, assume it's because aiya restarted (breaks buttons)
@@ -453,10 +447,7 @@ class DrawView(View):
     async def delete(self, button, interaction):
         try:
             # check if the output is from the person who requested it
-            if interaction.user.id == self.input_tuple[0].author.id:
-                await interaction.message.delete()
-            else:
-                await interaction.response.send_message("You can't delete other people's images!", ephemeral=True)
+            await interaction.message.delete()
         except(Exception,):
             button.disabled = True
             await interaction.response.edit_message(view=self)
@@ -474,10 +465,7 @@ class DeleteView(View):
     async def delete(self, button, interaction):
         try:
             # check if the output is from the person who requested it
-            if interaction.user.id == self.input_tuple[0].author.id:
                 await interaction.message.delete()
-            else:
-                await interaction.response.send_message("You can't delete other people's images!", ephemeral=True)
         except(Exception,):
             button.disabled = True
             await interaction.response.edit_message(view=self)
