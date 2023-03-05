@@ -400,12 +400,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         required=False,
     )
     @option(
-        'guidance_scale',
-        str,
-        description='Classifier-Free Guidance scale.',
-        required=False,
-    )
-    @option(
         'sampler',
         str,
         description='The sampler to use for generation.',
@@ -483,13 +477,26 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         description='The number of images to generate. Batch format: count,size. ex. 5,2 for 10 images',
         required=False,
     )
+    @option(
+        'image_strength',
+        float,
+        description='Multiplier of how much of the initial image to keep.',
+        required=False,
+    )
+    @option(
+        'effect_strength',
+        str,
+        description='Multiplier of how much of the effect to apply.',
+        required=False,
+    )
     async def edit_handler(self, ctx: discord.ApplicationContext, *,
                             prompt: str,
                             init_image: Optional[discord.Attachment] = None,
                             init_url: Optional[str],
+                            image_strength: Optional[float] = 1.2,
+                            effect_strength: Optional[str] = None,
                             negative_prompt: str = None,
                             steps: Optional[int] = None,
-                            guidance_scale: Optional[str] = None,
                             sampler: Optional[str] = None,
                             seed: Optional[int] = -1,
                             style: Optional[str] = None,
@@ -498,15 +505,14 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                             clip_skip: Optional[int] = None,
                             hypernet: Optional[str] = None,
                             lora: Optional[str] = None,
-                            strength: Optional[str] = None,
-                            batch: Optional[str] = None):
+                            strength: Optional[str] = None):
 
         # update defaults with any new defaults from settingscog
         channel = "Img Edit"
         if not(init_image or init_url):
             await ctx.send_response(content=f'Please input an image or url', ephemeral=True)
             return
-
+        guidance_scale = effect_strength
         if negative_prompt is None:
             negative_prompt = settings.read(channel)['negative_prompt']
         if steps is None:
@@ -529,10 +535,8 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             hypernet = settings.read(channel)['hypernet']
         if lora is None:
             lora = settings.read(channel)['lora']
-        if strength is None:
-            strength = settings.read(channel)['strength']
-        if batch is None:
-            batch = settings.read(channel)['batch']
+        strength = 1.0
+        batch = settings.read(channel)['batch']
 
         # if a model is not selected, do nothing
         data_model = settings.read(channel)['data_model']
@@ -618,7 +622,15 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             # try to convert string to Web UI-friendly float
             try:
                 guidance_scale = guidance_scale.replace(",", ".")
-                float(guidance_scale)
+                guidance_scale = float(guidance_scale)
+                reply_adds += f'\nGuidance Scale: ``{guidance_scale}``'
+            except(Exception,):
+                reply_adds += f"\nGuidance Scale can't be ``{guidance_scale}``! Setting to default of `7.0`."
+                guidance_scale = 7.0
+        else:
+            try:
+                guidance_scale = guidance_scale.replace(",", ".")
+                guidance_scale = float(guidance_scale)
                 reply_adds += f'\nGuidance Scale: ``{guidance_scale}``'
             except(Exception,):
                 reply_adds += f"\nGuidance Scale can't be ``{guidance_scale}``! Setting to default of `7.0`."
@@ -628,7 +640,8 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         if init_image:
             # try to convert string to Web UI-friendly float
             try:
-                strength = strength.replace(",", ".")
+                if isinstance(strength, str):
+                    strength = strength.replace(",", ".")
                 float(strength)
                 reply_adds += f'\nStrength: ``{strength}``'
             except(Exception,):
@@ -700,17 +713,26 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         # set up tuple of parameters to pass into the Discord view
         input_tuple = (
             ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
-            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition)
+            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, image_strength)
+        input_tuple_less= (
+            ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale-4.5, sampler, seed, strength,
+            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, image_strength-0.2)
+        input_tuple_more= (
+            ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
+            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, image_strength+0.4)
+        input_tuple_shift= (
+            ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale-+7.5, sampler, seed, strength,
+            init_image, batch, style, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, image_strength+0.4)
         view = viewhandler.DrawView(input_tuple)
         # setup the queue
+        send_list = [input_tuple,input_tuple_less, input_tuple_more, input_tuple_shift]
         user_queue_limit = settings.queue_check(ctx.author)
-        if queuehandler.GlobalQueue.dream_thread.is_alive():
-            if user_queue_limit == "Stop":
-                await ctx.send_response(content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.", ephemeral=True)
+        for item in send_list:
+            if queuehandler.GlobalQueue.dream_thread.is_alive():
+                queuehandler.GlobalQueue.queue.append(queuehandler.DrawObject(self, *item, view))
             else:
-                queuehandler.GlobalQueue.queue.append(queuehandler.DrawObject(self, *input_tuple, view))
-        else:
-            await queuehandler.process_dream(self, queuehandler.DrawObject(self, *input_tuple, view))
+                await queuehandler.process_dream(self, queuehandler.DrawObject(self, *item, view))
+        
         if user_queue_limit != "Stop":
             await ctx.send_response(f'<@{ctx.author.id}>, {settings.messages()}\nQueue: ``{len(queuehandler.GlobalQueue.queue)}`` - ``{simple_prompt}``\nSteps: ``{steps}``{reply_adds}')
 
@@ -770,6 +792,13 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                     "denoising_strength": queue_object.strength
                 }
                 payload.update(img_payload)
+
+            # update payload with image strength options
+            if queue_object.image_strength:
+                img_str_payload = {
+                    "image_cfg_scale" : queue_object.image_strength
+                }
+                payload.update(img_str_payload)
 
             # update payload if high-res fix is used
             if queue_object.highres_fix != 'Disabled':

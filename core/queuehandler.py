@@ -6,7 +6,7 @@ from threading import Thread
 class DrawObject:
     def __init__(self, cog, ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height,
                  guidance_scale, sampler, seed, strength, init_image, batch, styles, facefix, highres_fix,
-                 clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, view):
+                 clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition, image_strength:None, view):
         self.cog = cog
         self.ctx = ctx
         self.simple_prompt = simple_prompt
@@ -32,6 +32,8 @@ class DrawObject:
         self.positive_ending = positive_ending
         self.negative_addition = negative_addition
         self.positive_addition = positive_addition
+
+        self.image_strength = image_strength
         
         self.view = view
 
