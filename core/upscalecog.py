@@ -214,11 +214,11 @@ class UpscaleCog(commands.Cog):
 
                     draw_time = '{0:.3f}'.format(end_time - start_time)
                     message = f'my upscale of ``{queue_object.resize}``x took me ``{draw_time}`` seconds!'
-                    file = discord.File(fp=buffer, filename=file_path)
+                    file = discord.File(fp=buffer, filename=f'{self.file_name[0:120]}-{queue_object.resize}.png')
 
                     queuehandler.process_post(
                         self, queuehandler.PostObject(
-                            self, queue_object.ctx, content=f'<@{queue_object.ctx.author.id}>, {message}', file=file, files='', embed='', view=queue_object.view))
+                            self, queue_object.ctx, content=f'<@{queue_object.ctx.author.id}>, {message}', file=file, embed='', view=queue_object.view))
             Thread(target=post_dream, daemon=True).start()
 
         except Exception as e:

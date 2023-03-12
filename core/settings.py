@@ -13,28 +13,7 @@ from core import queuehandler
 self = discord.Bot()
 dir_path = os.path.dirname(os.path.realpath(__file__))
 path = 'resources/'.format(dir_path)
-
-# the fallback defaults for AIYA if bot host doesn't set anything
-template = {
-    "negative_prompt": "",
-    "data_model": "",
-    "steps": 30,
-    "max_steps": 50,
-    "width": 512,
-    "height": 512,
-    "guidance_scale": "7.0",
-    "sampler": "Euler a",
-    "style": "None",
-    "facefix": "None",
-    "highres_fix": 'Disabled',
-    "clip_skip": 1,
-    "hypernet": "None",
-    "lora": "None",
-    "strength": "0.75",
-    "batch": "1,1",
-    "max_batch": "1,1",
-    "upscaler_1": "ESRGAN_4x"
-}
+template = {}
 
 # default config data
 default_config = """# This is the config file. It's advisable to restart if any changes are made.
@@ -59,18 +38,47 @@ dir = "outputs"
 # The limit of tasks a user can have waiting in queue (at least 1)
 queue_limit = 1
 
+# Whether or not buttons keep generating in batches ("True"/"False")
+batch_buttons = "False"
+
 # The maximum value allowed for width/height (keep as multiple of 64)
 max_size = 1024
 
-# AIYA won't generate if prompt has any words in the ban list.
+# The resize amount when using context menu Quick Upscale
+quick_upscale_resize = 2.0
+
+# AIYA won't generate if prompt has any words in the ban list
 # Separate with commas; example, ["a", "b", "c"]
 prompt_ban_list = []
-# These words will be automatically removed from the prompt.
+# These words will be automatically removed from the prompt
 prompt_ignore_list = []
-# Choose whether or not ignored words are displayed to user.
+# Choose whether or not ignored words are displayed to user
 display_ignored_words = "False"
-# These words will be added to the beginning of the negative prompt.
+# These words will be added to the beginning of the negative prompt
 negative_prompt_prefix = []
+
+
+# the fallback channel defaults template for AIYA if nothing is set
+negative_prompt = ""
+data_model = ""
+steps = 30
+max_steps = 50
+width = 512
+height = 512
+guidance_scale = "7.0"
+sampler = "Euler a"
+style = "None"
+facefix = "None"
+highres_fix = "Disabled"
+clip_skip = 1
+hypernet = "None"
+hyper_multi = "0.85"
+lora = "None"
+lora_multi = "0.85"
+strength = "0.75"
+batch = "1,1"
+max_batch = "1,1"
+upscaler_1 = "ESRGAN_4x"
 """
 
 
@@ -96,10 +104,13 @@ class GlobalVar:
     embeddings_2 = []
     hyper_names = []
     lora_names = []
+    extra_nets = []
     upscaler_names = []
     hires_upscaler_names = []
     save_outputs = "True"
     queue_limit = 10
+    batch_buttons = "False"
+    quick_upscale_resize = 2.0
     prompt_ban_list = []
     prompt_ignore_list = []
     display_ignored_words = "False"
@@ -157,6 +168,42 @@ def prompt_mod(prompt, negative_prompt):
     return "None"
 
 
+def extra_net_check(prompt, extra_net, net_multi):
+    # grab extra net multiplier if there is one
+    if ':' in extra_net:
+        net_multi = extra_net.split(':', 1)[1]
+        extra_net = extra_net.split(':', 1)[0]
+        try:
+            net_multi = net_multi.replace(",", ".")
+            float(net_multi)
+        except(Exception,):
+            # set default if invalid net multiplier is given
+            net_multi = 0.85
+    # figure out what extra_net was used
+    if extra_net is not None and extra_net != 'None':
+        for network in global_var.hyper_names:
+            if extra_net == network:
+                prompt += f' <hypernet:{extra_net}:{str(net_multi)}>'
+        for network in global_var.lora_names:
+            if extra_net == network:
+                prompt += f' <lora:{extra_net}:{str(net_multi)}>'
+    return prompt, extra_net, net_multi
+
+
+def extra_net_defaults(prompt, channel):
+    check(channel)
+    hypernet = read(channel)['hypernet']
+    hyper_multi = read(channel)['hyper_multi']
+    lora = read(channel)['lora']
+    lora_multi = read(channel)['lora_multi']
+    # append channel default hypernet or lora to the prompt
+    if hypernet != 'None' and hypernet not in prompt:
+        prompt += f' <hypernet:{hypernet}:{hyper_multi}>'
+    if lora != 'None' and lora not in prompt:
+        prompt += f' <lora:{lora}:{lora_multi}>'
+    return prompt
+
+
 def queue_check(author_compare):
     user_queue = 0
     for queue_object in queuehandler.GlobalQueue.queue:
@@ -192,6 +239,39 @@ def check(channel_id):
                 if row['display_name'] == 'Default' and row['model_full_name'] == '':
                     update(str(channel_id), 'data_model', '')
                     print('I see models.csv is on defaults. Updating model settings to default.')
+
+
+def config_auth(config):
+    global_var.url = config['url']
+    global_var.dir = config['dir']
+    global_var.username = config['user']
+    global_var.password = config['pass']
+    global_var.api_user = config['apiuser']
+    global_var.api_pass = config['apipass']
+
+
+def generate_template(template_pop, config):
+    template_pop['negative_prompt'] = config['negative_prompt']
+    template_pop['data_model'] = config['data_model']
+    template_pop['steps'] = config['steps']
+    template_pop['max_steps'] = config['max_steps']
+    template_pop['width'] = config['width']
+    template_pop['height'] = config['height']
+    template_pop['guidance_scale'] = config['guidance_scale']
+    template_pop['sampler'] = config['sampler']
+    template_pop['style'] = config['style']
+    template_pop['facefix'] = config['facefix']
+    template_pop['highres_fix'] = config['highres_fix']
+    template_pop['clip_skip'] = config['clip_skip']
+    template_pop['hypernet'] = config['hypernet']
+    template_pop['hyper_multi'] = config['hyper_multi']
+    template_pop['lora'] = config['lora']
+    template_pop['lora_multi'] = config['lora_multi']
+    template_pop['strength'] = config['strength']
+    template_pop['batch'] = config['batch']
+    template_pop['max_batch'] = config['max_batch']
+    template_pop['upscaler_1'] = config['upscaler_1']
+    return template_pop
 
 
 def build(channel_id):
@@ -302,15 +382,10 @@ def startup_check():
         tomlkit.dump(config, f)
         f.close()
 
-    global_var.url = config['url']
+    config_auth(config)
+    generate_template(template, config)
     print(f'Using URL: {global_var.url}')
-    global_var.dir = config['dir']
     print(f'Using outputs directory: {global_var.dir}')
-
-    global_var.username = config['user']
-    global_var.password = config['pass']
-    global_var.api_user = config['apiuser']
-    global_var.api_pass = config['apipass']
 
     # check if Web UI is running
     connected = False
@@ -401,15 +476,13 @@ def populate_global_vars():
         config = tomlkit.loads(content)
 
     # update these again in case changes were made
-    global_var.url = config['url']
-    global_var.dir = config['dir']
-    global_var.username = config['user']
-    global_var.password = config['pass']
-    global_var.api_user = config['apiuser']
-    global_var.api_pass = config['apipass']
+    config_auth(config)
+    generate_template(template, config)
 
     global_var.save_outputs = config['save_outputs']
     global_var.queue_limit = config['queue_limit']
+    global_var.batch_buttons = config['batch_buttons']
+    global_var.quick_upscale_resize = config['quick_upscale_resize']
     global_var.prompt_ban_list = [x for x in config['prompt_ban_list']]
     global_var.prompt_ignore_list = [x for x in config['prompt_ignore_list']]
     global_var.display_ignored_words = config['display_ignored_words']
@@ -499,5 +572,6 @@ def populate_global_vars():
     if 'None' not in global_var.hyper_names:
         global_var.hyper_names.insert(0, 'None')
     global_var.lora_names.remove('')
+    global_var.extra_nets = global_var.hyper_names + global_var.lora_names
     global_var.lora_names.insert(0, 'None')
     global_var.hires_upscaler_names.insert(0, 'Disabled')

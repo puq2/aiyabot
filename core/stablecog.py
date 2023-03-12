@@ -1,5 +1,4 @@
 import base64
-import contextlib
 import discord
 import io
 import math
@@ -7,11 +6,9 @@ import random
 import requests
 import time
 import traceback
-from asyncio import AbstractEventLoop
 from PIL import Image, PngImagePlugin
 from discord import option
 from discord.ext import commands
-from threading import Thread
 from typing import Optional
 from PIL import ImageFile
 
@@ -99,6 +96,13 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.style_autocomplete),
     )
     @option(
+        'extra_net',
+        str,
+        description='Apply an extra network to influence the output. To set multiplier, add :# (# = 0.0 - 1.0)',
+        required=False,
+        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.extra_net_autocomplete),
+    )
+    @option(
         'facefix',
         str,
         description='Tries to improve faces in images.',
@@ -118,20 +122,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         description='Number of last layers of CLIP model to skip.',
         required=False,
         choices=[x for x in range(1, 13, 1)]
-    )
-    @option(
-        'hypernet',
-        str,
-        description='Apply a hypernetwork model to influence the output.',
-        required=False,
-        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.hyper_autocomplete),
-    )
-    @option(
-        'lora',
-        str,
-        description='Apply a LoRA model to influence the output.',
-        required=False,
-        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.lora_autocomplete),
     )
     @option(
         'strength',
@@ -165,11 +155,10 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                             sampler: Optional[str] = None,
                             seed: Optional[int] = -1,
                             styles: Optional[str] = None,
+                            extra_net: Optional[str] = None,
                             facefix: Optional[str] = None,
                             highres_fix: Optional[str] = None,
                             clip_skip: Optional[int] = None,
-                            hypernet: Optional[str] = None,
-                            lora: Optional[str] = None,
                             strength: Optional[str] = None,
                             init_image: Optional[discord.Attachment] = None,
                             init_url: Optional[str],
@@ -202,10 +191,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             highres_fix = settings.read(channel)['highres_fix']
         if clip_skip is None:
             clip_skip = settings.read(channel)['clip_skip']
-        if hypernet is None:
-            hypernet = settings.read(channel)['hypernet']
-        if lora is None:
-            lora = settings.read(channel)['lora']
         if strength is None:
             strength = settings.read(channel)['strength']
         if batch is None:
@@ -217,16 +202,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             data_model = settings.read(channel)['data_model']
 
         simple_prompt = prompt
-        # take selected data_model and get model_name, then update data_model with the full name
-        for model in settings.global_var.model_info.items():
-            if model[0] == data_model:
-                model_name = model[0]
-                data_model = model[1][0]
-                # look at the model for activator token and prepend prompt with it
-                if model[1][3]:
-                    prompt = model[1][3] + " " + prompt
-                break
-
         # run through mod function if any moderation values are set in config
         clean_negative = negative_prompt
         if settings.global_var.prompt_ban_list or settings.global_var.prompt_ignore_list or settings.global_var.negative_prompt_prefix:
@@ -241,11 +216,20 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                 negative_prompt = mod_results[2]
                 clean_negative = mod_results[3]
 
-        # if a hypernet or lora is used, append it to the prompt
-        if hypernet != 'None':
-            prompt += f' <hypernet:{hypernet}:0.85>'
-        if lora != 'None':
-            prompt += f' <lora:{lora}:0.85>'
+        # take selected data_model and get model_name, then update data_model with the full name
+        for model in settings.global_var.model_info.items():
+            if model[0] == data_model:
+                model_name = model[0]
+                data_model = model[1][0]
+                # look at the model for activator token and prepend prompt with it
+                if model[1][3]:
+                    prompt = model[1][3] + " " + prompt
+                break
+
+        net_multi = 0.85
+        if extra_net is not None:
+            prompt, extra_net, net_multi = settings.extra_net_check(prompt, extra_net, net_multi)
+        prompt = settings.extra_net_defaults(prompt, channel)
 
         if data_model != '':
             print(f'Request -- {ctx.author.name}#{ctx.author.discriminator} -- Prompt: {prompt}')
@@ -306,14 +290,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             if batch[2] == 1:
                 # if over the limits, cut the number in half and let AIYA scale down
                 total = max_batch[0] * max_batch[1]
-
-                # add hard limit of 10 images until I can figure how to bypass this discord limit - single value edition
-                if batch[0] > 10:
-                    batch[0] = 10
-                    if total > 10:
-                        total = 10
-                    reply_adds += f"\nI'm currently limited to a max of 10 drawings per post..."
-
                 if batch[0] > total:
                     batch[0] = math.ceil(batch[0] / 2)
                     batch[1] = math.ceil(batch[0] / 2)
@@ -333,23 +309,13 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             if batch[1] > max_batch[1]:
                 reply_adds += f"\nThe max batch size I'm allowed here is ``{max_batch[1]}``!"
                 batch[1] = max_batch[1]
-
-            # add hard limit of 10 images until I can figure how to bypass this discord limit - multi value edition
-            if batch[0] * batch[1] > 10:
-                while batch[0] * batch[1] > 10:
-                    if batch[0] != 1:
-                        batch[0] -= 1
-                    if batch[1] != 1:
-                        batch[1] -= 1
-                reply_adds += f"\nI'm currently limited to a max of 10 drawings per post..."
-
             reply_adds += f'\nBatch count: ``{batch[0]}`` - Batch size: ``{batch[1]}``'
         if styles != settings.read(channel)['style']:
             reply_adds += f'\nStyle: ``{styles}``'
-        if hypernet != settings.read(channel)['hypernet']:
-            reply_adds += f'\nHypernet: ``{hypernet}``'
-        if lora != settings.read(channel)['lora']:
-            reply_adds += f'\nLoRA: ``{lora}``'
+        if extra_net is not None and extra_net != 'None':
+            reply_adds += f'\nExtra network: ``{extra_net}``'
+            if net_multi != 0.85:
+                reply_adds += f' (multiplier: ``{net_multi}``)'
         if facefix != settings.read(channel)['facefix']:
             reply_adds += f'\nFace restoration: ``{facefix}``'
         if clip_skip != settings.read(channel)['clip_skip']:
@@ -362,7 +328,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         # set up tuple of parameters to pass into the Discord view
         input_tuple = (
             ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
-            init_image, batch, styles, facefix, highres_fix, clip_skip, hypernet, lora, positive_ending, negative_addition, positive_addition)
+            init_image, batch, styles, facefix, highres_fix, clip_skip, extra_net, positive_ending, negative_addition, positive_addition)
         view = viewhandler.DrawView(input_tuple)
         # setup the queue
         user_queue_limit = settings.queue_check(ctx.author)
@@ -739,19 +705,19 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
 
 
     # the function to queue Discord posts
-    def post(self, event_loop: AbstractEventLoop, post_queue_object: queuehandler.PostObject):
+    def post(self, event_loop: queuehandler.GlobalQueue.post_event_loop, post_queue_object: queuehandler.PostObject):
         event_loop.create_task(
             post_queue_object.ctx.channel.send(
                 content=post_queue_object.content,
-                files=post_queue_object.files,
-                view=post_queue_object.view,
+                file=post_queue_object.file,
+                view=post_queue_object.view
             )
         )
         if queuehandler.GlobalQueue.post_queue:
             self.post(self.event_loop, self.queue.pop(0))
 
     # generate the image
-    def dream(self, event_loop: AbstractEventLoop, queue_object: queuehandler.DrawObject):
+    def dream(self, event_loop: queuehandler.GlobalQueue.event_loop, queue_object: queuehandler.DrawObject):
         try:
             start_time = time.time()
 
@@ -844,49 +810,63 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             file_name = "".join(c for c in queue_object.simple_prompt if c.isalnum() or c in keep_chars).rstrip()
 
             # save local copy of image and prepare PIL images
-            pil_images = []
-            for i, image_base64 in enumerate(response_data['images']):
-                image = Image.open(io.BytesIO(base64.b64decode(image_base64.split(",", 1)[0])))
-                pil_images.append(image)
+            image_data = response_data['images']
+            count = 0
+            for i in image_data:
+                count += 1
+                image = Image.open(io.BytesIO(base64.b64decode(i)))
 
                 # grab png info
                 png_payload = {
-                    "image": "data:image/png;base64," + image_base64
+                    "image": "data:image/png;base64," + i
                 }
                 png_response = s.post(url=f'{settings.global_var.url}/sdapi/v1/png-info', json=png_payload)
 
                 metadata = PngImagePlugin.PngInfo()
                 metadata.add_text("parameters", png_response.json().get("info"))
 
+                epoch_time = int(time.time())
+                file_path = f'{settings.global_var.dir}/{epoch_time}-{queue_object.seed}-{file_name[0:120]}-{count}.jpeg'
                 if settings.global_var.save_outputs == 'True':
-                    epoch_time = int(time.time())
-                    file_path = f'{settings.global_var.dir}/{epoch_time}-{queue_object.seed}-{file_name[0:120]}-{i}.jpeg'
                     image.save(file_path, pnginfo=metadata)
                     print(f'Saved image: {file_path}')
 
-            # increment number of images generated
-            settings.stats_count(queue_object.batch[0]*queue_object.batch[1])
+                settings.stats_count(1)
 
-            # post to discord
-            def post_dream():
-                with contextlib.ExitStack() as stack:
-                    buffer_handles = [stack.enter_context(io.BytesIO()) for _ in pil_images]
+                # set up discord message
+                content = f'> for {queue_object.ctx.author.name}'
+                image_count = len(image_data)
+                noun_descriptor = "drawing" if image_count == 1 else f'{image_count} drawings'
+                draw_time = '{0:.3f}'.format(end_time - start_time)
+                message = f'my {noun_descriptor} of ``{queue_object.simple_prompt}`` took me ``{draw_time}`` seconds!'
 
-                    image_count = len(pil_images)
-                    noun_descriptor = "drawing" if image_count == 1 else f'{image_count} drawings'
+                view = queue_object.view
+                if count == 1:
+                    content = f'<@{queue_object.ctx.author.id}>, {message}'
+                # only enable buttons on last image in batch
+                if len(image_data) > 1:
+                    if count == 1:
+                        content = f'<@{queue_object.ctx.author.id}>, {message}\n' \
+                                  f'*Please use the context menu for drawings without buttons.*'
+                    if count != len(image_data):
+                        view = None
 
-                    for (pil_image, buffer) in zip(pil_images, buffer_handles):
-                        pil_image.save(buffer, 'jpeg', pnginfo=metadata)
-                        buffer.seek(0)
-                    draw_time = '{0:.3f}'.format(end_time - start_time)
-                    message = f'my {noun_descriptor} of ``{queue_object.simple_prompt}`` took me ``{draw_time}`` seconds!'
-                    files = [discord.File(fp=buffer, filename=f'{queue_object.seed}-{i}.jpeg') for (i, buffer) in
-                             enumerate(buffer_handles)]
+                # post to discord
+                with io.BytesIO() as buffer:
+                    image = Image.open(io.BytesIO(base64.b64decode(i)))
+                    image.save(buffer, 'PNG', pnginfo=metadata)
+                    buffer.seek(0)
 
+                    file = discord.File(fp=buffer, filename=f'{queue_object.seed}-{count}.png')
                     queuehandler.process_post(
                         self, queuehandler.PostObject(
-                            self, queue_object.ctx, content=f'<@{queue_object.ctx.author.id}>, {message}', file='', files=files, embed='', view=queue_object.view))
-            Thread(target=post_dream, daemon=True).start()
+                            self, queue_object.ctx, content=content, file=file, embed='', view=view))
+                # increment seed for view when using batch
+                if count != len(image_data):
+                    batch_seed = list(queue_object.view.input_tuple)
+                    batch_seed[10] += 1
+                    new_tuple = tuple(batch_seed)
+                    queue_object.view.input_tuple = new_tuple
 
         except KeyError:
             embed = discord.Embed(title='txt2img failed', description=f'An invalid parameter was found!',

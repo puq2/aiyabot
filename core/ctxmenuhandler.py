@@ -5,6 +5,9 @@ import requests
 from urlextract import URLExtract
 
 from core import settings
+from core import queuehandler
+from core import upscalecog
+from core import viewhandler
 
 
 def extra_net_search(field):
@@ -66,6 +69,9 @@ async def parse_image_info(ctx, image_url, command):
         # initialize extra params
         steps, size, guidance_scale, sampler, seed = '', '', '', '', ''
         style, facefix, highres_fix, clip_skip = '', '', '', ''
+        strength, has_init_url = '', False
+        if command == 'button' and ctx is not None:
+            has_init_url = True
 
         # try to find extra networks
         hypernet, lora = extra_net_search(prompt_field)
@@ -110,6 +116,9 @@ async def parse_image_info(ctx, image_url, command):
             if 'Clip skip: ' in line:
                 clip_skip = line.split(': ', 1)[1]
 
+            if 'Denoising strength: ' in line:
+                strength = line.split(': ', 1)[1]
+
         width_height = size.split("x")
 
         # try to find the model name and activator token
@@ -129,8 +138,9 @@ async def parse_image_info(ctx, image_url, command):
             negative_prompt = mod_results[3]
 
         # create embed and give the best effort in trying to parse the png info
-        embed = discord.Embed(title="About the image!", description="This is what I'm able to find about this image.")
-        embed.set_thumbnail(url=image_url)
+        embed = discord.Embed(title="About the image!", description="")
+        if not has_init_url:  # for some reason this bugs out the embed
+            embed.set_thumbnail(url=image_url)
         if len(prompt_field) > 1024:
             prompt_field = f'{prompt_field[:1010]}....'
         embed.colour = settings.global_var.embed_color
@@ -141,7 +151,7 @@ async def parse_image_info(ctx, image_url, command):
         copy_command = f'/draw prompt:{prompt_field} steps:{steps} width:{width_height[0]} height:{width_height[1]}' \
                        f' guidance_scale:{guidance_scale} sampler:{sampler} seed:{seed}'
         if display_name != 'Unknown':
-            copy_command += f' data_model: {display_name}'
+            copy_command += f' data_model:{display_name}'
 
         if negative_prompt != '':
             copy_command += f' negative_prompt:{negative_prompt}'
@@ -176,8 +186,15 @@ async def parse_image_info(ctx, image_url, command):
                 network_params += f'\nHypernet: ``{key}`` (multiplier: ``{value}``)'
             embed.add_field(name=f'Extra networks', value=network_params, inline=False)
 
+        if has_init_url:
+            # not interested in adding embed fields for strength and init_image
+            copy_command += f' strength:{strength} init_url:{str(ctx)}'
+
         embed.add_field(name=f'Command for copying', value=f'', inline=False)
         embed.set_footer(text=copy_command)
+
+        if command == 'button':
+            return embed
 
         await ctx.respond(embed=embed, ephemeral=True)
     except Exception as e:
@@ -199,6 +216,56 @@ async def get_image_info(ctx, message: discord.Message):
 
     if not urls:
         await ctx.respond(content="No images were found in the message...", ephemeral=True)
+        return
 
     for image_url in urls:
         await parse_image_info(ctx, image_url, "context")
+
+
+async def quick_upscale(self, ctx, message: discord.Message):
+    # look for images in message (we will only use the first one, though)
+    all_content = message.content
+    if message.attachments:
+        for i in message.attachments:
+            all_content += f"\n{i}"
+    extractor = URLExtract()
+    urls = extractor.find_urls(all_content)
+
+    if not urls:
+        await ctx.respond(content="No images were found in the message...", ephemeral=True)
+        return
+
+    # update defaults with any new defaults from settingscog
+    channel = '% s' % ctx.channel.id
+    settings.check(channel)
+    upscaler_1 = settings.read(channel)['upscaler_1']
+
+    init_image = requests.get(urls[0])
+    resize = settings.global_var.quick_upscale_resize
+    upscaler_2, upscaler_2_strength = "None", '0.5'
+    gfpgan, codeformer = '0.0', '0.0'
+    upscale_first = False
+
+    message = ''
+    if len(urls) > 1:
+        message = 'the first image '
+
+    # set up tuple of parameters
+    input_tuple = (
+        ctx, resize, init_image, upscaler_1, upscaler_2, upscaler_2_strength, gfpgan, codeformer, upscale_first)
+    view = viewhandler.DeleteView(input_tuple)
+    user_queue_limit = settings.queue_check(ctx.author)
+    upscale_dream = upscalecog.UpscaleCog(self)
+    if queuehandler.GlobalQueue.dream_thread.is_alive():
+        if user_queue_limit == "Stop":
+            await ctx.send_response(
+                content=f"Please wait! You're past your queue limit of {settings.global_var.queue_limit}.",
+                ephemeral=True)
+        else:
+            queuehandler.GlobalQueue.queue.append(queuehandler.UpscaleObject(upscale_dream, *input_tuple, view))
+    else:
+        await queuehandler.process_dream(upscale_dream, queuehandler.UpscaleObject(upscale_dream, *input_tuple, view))
+    if user_queue_limit != "Stop":
+        await ctx.send_response(
+            f'<@{ctx.author.id}>, upscaling {message}by ``{resize}``x using ``{upscaler_1}``!\n'
+            f'Queue: ``{len(queuehandler.GlobalQueue.queue)}``', delete_after=45.0)
