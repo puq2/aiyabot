@@ -386,6 +386,13 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.style_autocomplete),
     )
     @option(
+        'extra_net',
+        str,
+        description='Apply an extra network to influence the output. To set multiplier, add :# (# = 0.0 - 1.0)',
+        required=False,
+        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.extra_net_autocomplete),
+    )
+    @option(
         'facefix',
         str,
         description='Tries to improve faces in images.',
@@ -405,20 +412,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         description='Number of last layers of CLIP model to skip.',
         required=False,
         choices=[x for x in range(1, 13, 1)]
-    )
-    @option(
-        'hypernet',
-        str,
-        description='Apply a hypernetwork model to influence the output.',
-        required=False,
-        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.hyper_autocomplete),
-    )
-    @option(
-        'lora',
-        str,
-        description='Apply a LoRA model to influence the output.',
-        required=False,
-        autocomplete=discord.utils.basic_autocomplete(settingscog.SettingsCog.lora_autocomplete),
     )
     @option(
         'strength',
@@ -465,12 +458,11 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                             steps: Optional[int] = None,
                             sampler: Optional[str] = None,
                             seed: Optional[int] = -1,
-                            style: Optional[str] = None,
+                            styles: Optional[str] = None,
+                            extra_net: Optional[str] = None,
                             facefix: Optional[str] = None,
                             highres_fix: Optional[str] = None,
                             clip_skip: Optional[int] = None,
-                            hypernet: Optional[str] = None,
-                            lora: Optional[str] = None,
                             strength: Optional[str] = None):
 
         # update defaults with any new defaults from settingscog
@@ -489,18 +481,14 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             guidance_scale = settings.read(channel)['guidance_scale']
         if sampler is None:
             sampler = settings.read(channel)['sampler']
-        if style is None:
-            style = settings.read(channel)['style']
+        if styles is None:
+            styles = settings.read(channel)['style']
         if facefix is None:
             facefix = settings.read(channel)['facefix']
         if highres_fix is None:
             highres_fix = settings.read(channel)['highres_fix']
         if clip_skip is None:
             clip_skip = settings.read(channel)['clip_skip']
-        if hypernet is None:
-            hypernet = settings.read(channel)['hypernet']
-        if lora is None:
-            lora = settings.read(channel)['lora']
         strength = 1.0
         batch = settings.read(channel)['batch']
 
@@ -508,16 +496,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         data_model = settings.read(channel)['data_model']
 
         simple_prompt = prompt
-        # take selected data_model and get model_name, then update data_model with the full name
-        for model in settings.global_var.model_info.items():
-            if model[0] == data_model:
-                model_name = model[0]
-                data_model = model[1][0]
-                # look at the model for activator token and prepend prompt with it
-                if model[1][3]:
-                    prompt = model[1][3] + " " + prompt
-                break
-
         # run through mod function if any moderation values are set in config
         clean_negative = negative_prompt
         if settings.global_var.prompt_ban_list or settings.global_var.prompt_ignore_list or settings.global_var.negative_prompt_prefix:
@@ -532,11 +510,20 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                 negative_prompt = mod_results[2]
                 clean_negative = mod_results[3]
 
-        # if a hypernet or lora is used, append it to the prompt
-        if hypernet != 'None':
-            prompt += f' <hypernet:{hypernet}:0.85>'
-        if lora != 'None':
-            prompt += f' <lora:{lora}:0.85>'
+        # take selected data_model and get model_name, then update data_model with the full name
+        for model in settings.global_var.model_info.items():
+            if model[0] == data_model:
+                model_name = model[0]
+                data_model = model[1][0]
+                # look at the model for activator token and prepend prompt with it
+                if model[1][3]:
+                    prompt = model[1][3] + " " + prompt
+                break
+
+        net_multi = 0.85
+        if extra_net is not None:
+            prompt, extra_net, net_multi = settings.extra_net_check(prompt, extra_net, net_multi)
+        prompt = settings.extra_net_defaults(prompt, channel)
 
         if data_model != '':
             print(f'Request -- {ctx.author.name}#{ctx.author.discriminator} -- Prompt: {prompt}')
@@ -623,14 +610,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             if batch[2] == 1:
                 # if over the limits, cut the number in half and let AIYA scale down
                 total = max_batch[0] * max_batch[1]
-
-                # add hard limit of 10 images until I can figure how to bypass this discord limit - single value edition
-                if batch[0] > 10:
-                    batch[0] = 10
-                    if total > 10:
-                        total = 10
-                    reply_adds += f"\nI'm currently limited to a max of 10 drawings per post..."
-
                 if batch[0] > total:
                     batch[0] = math.ceil(batch[0] / 2)
                     batch[1] = math.ceil(batch[0] / 2)
@@ -650,23 +629,13 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
             if batch[1] > max_batch[1]:
                 reply_adds += f"\nThe max batch size I'm allowed here is ``{max_batch[1]}``!"
                 batch[1] = max_batch[1]
-
-            # add hard limit of 10 images until I can figure how to bypass this discord limit - multi value edition
-            if batch[0] * batch[1] > 10:
-                while batch[0] * batch[1] > 10:
-                    if batch[0] != 1:
-                        batch[0] -= 1
-                    if batch[1] != 1:
-                        batch[1] -= 1
-                reply_adds += f"\nI'm currently limited to a max of 10 drawings per post..."
-
             reply_adds += f'\nBatch count: ``{batch[0]}`` - Batch size: ``{batch[1]}``'
         if styles != settings.read(channel)['style']:
             reply_adds += f'\nStyle: ``{styles}``'
-        if hypernet != settings.read(channel)['hypernet']:
-            reply_adds += f'\nHypernet: ``{hypernet}``'
-        if lora != settings.read(channel)['lora']:
-            reply_adds += f'\nLoRA: ``{lora}``'
+        if extra_net is not None and extra_net != 'None':
+            reply_adds += f'\nExtra network: ``{extra_net}``'
+            if net_multi != 0.85:
+                reply_adds += f' (multiplier: ``{net_multi}``)'
         if facefix != settings.read(channel)['facefix']:
             reply_adds += f'\nFace restoration: ``{facefix}``'
         if clip_skip != settings.read(channel)['clip_skip']:
@@ -854,10 +823,10 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                 # post to discord
                 with io.BytesIO() as buffer:
                     image = Image.open(io.BytesIO(base64.b64decode(i)))
-                    image.save(buffer, 'PNG', pnginfo=metadata)
+                    image.save(buffer, 'jpeg', pnginfo=metadata)
                     buffer.seek(0)
 
-                    file = discord.File(fp=buffer, filename=f'{queue_object.seed}-{count}.png')
+                    file = discord.File(fp=buffer, filename=f'{queue_object.seed}-{count}.jpeg')
                     queuehandler.process_post(
                         self, queuehandler.PostObject(
                             self, queue_object.ctx, content=content, file=file, embed='', view=view))
