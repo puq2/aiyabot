@@ -17,6 +17,64 @@ from core import viewhandler
 from core import settings
 from core import settingscog
 
+import threading
+import contextlib
+
+async def update_progress(event_loop, status_message_task, s, queue_object, tries):
+    status_message = status_message_task.result()
+    try:
+        progress_data = s.get(url=f'{settings.global_var.url}/sdapi/v1/progress').json()
+
+        if progress_data["current_image"] is None and tries <= 10:
+            time.sleep(1)
+            event_loop.create_task(update_progress(event_loop, status_message_task, s, queue_object, tries + 1))
+            return
+
+        if progress_data["current_image"] is None and tries > 100:
+            return
+
+        if progress_data["current_image"]:
+            image = Image.open(io.BytesIO(base64.b64decode(progress_data["current_image"])))
+
+            with contextlib.ExitStack() as stack:
+                buffer = stack.enter_context(io.BytesIO())
+                image.save(buffer, 'jpeg')
+                buffer.seek(0)
+                file = discord.File(fp=buffer, filename=f'{queue_object.seed}.jpeg')
+        else:
+            file=None
+
+        ips = round((int(queue_object.steps) - progress_data["state"]["sampling_step"]) / progress_data["eta_relative"], 2)
+        speed_comment = ''
+        if ips > 4:
+            speed_comment = '(this is really fucking **fast**)'
+        if ips < 1:
+            speed_comment = '(this is really fucking **slow**)'
+
+        view = viewhandler.ProgressView()
+        if file:
+            await status_message.edit(
+                    content=f'**Author ID**: {queue_object.ctx.author.id} ({queue_object.ctx.author.name})\n'
+                            f'**Prompt**: `{queue_object.prompt}`\n**Progress**: {round(progress_data.get("progress") * 100, 2)}% '
+                            f'\n{progress_data.get("state").get("sampling_step")}/{queue_object.steps} iterations, '
+                            f'~{ips} iterations per second {speed_comment}'
+                            f'\n**Relative ETA**: {round(progress_data.get("eta_relative"), 2)} seconds',
+                    files=[file], view=view)
+        else:
+            await status_message.edit(
+                    content=f'**Author ID**: {queue_object.ctx.author.id} ({queue_object.ctx.author.name})\n'
+                            f'**Prompt**: `{queue_object.prompt}`\n**Progress**: {round(progress_data.get("progress") * 100, 2)}% '
+                            f'\n{progress_data.get("state").get("sampling_step")}/{queue_object.steps} iterations, '
+                            f'~{ips} iterations per second {speed_comment}'
+                            f'\n**Relative ETA**: {round(progress_data.get("eta_relative"), 2)} seconds',
+                    view=view)
+    except ZeroDivisionError:
+        print(f"Done")
+        return
+
+    time.sleep(1)
+    event_loop.create_task(update_progress(event_loop, status_message_task, s, queue_object, tries))
+
 
 class StableCog(commands.Cog, name='Stable Diffusion', description='Create images from natural language.'):
     ctx_parse = discord.ApplicationContext
@@ -170,6 +228,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         else:
             channel = data_model
             settings.check(channel)
+        print(channel)
 
         if negative_prompt is None:
             negative_prompt = settings.read(channel)['negative_prompt']
@@ -200,7 +259,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         model_name = 'Default'
         if data_model is None:
             data_model = settings.read(channel)['data_model']
-
+        print(data_model)
         simple_prompt = prompt
         # run through mod function if any moderation values are set in config
         clean_negative = negative_prompt
@@ -328,7 +387,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         # set up tuple of parameters to pass into the Discord view
         input_tuple = (
             ctx, simple_prompt, prompt, negative_prompt, data_model, steps, width, height, guidance_scale, sampler, seed, strength,
-            init_image, batch, styles, facefix, highres_fix, clip_skip, extra_net, positive_ending, negative_addition, positive_addition)
+            init_image, batch, styles, facefix, highres_fix, clip_skip, extra_net, positive_ending, negative_addition, positive_addition, None) #None for image_strength
         view = viewhandler.DrawView(input_tuple)
         # setup the queue
         user_queue_limit = settings.queue_check(ctx.author)
@@ -567,8 +626,6 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
         if steps > settings.read(channel)['max_steps']:
             steps = settings.read(channel)['max_steps']
             reply_adds += f'\nExceeded maximum of ``{steps}`` steps! This is the best I can do...'
-        if model_name != 'Default':
-            reply_adds += f'\nModel: ``{model_name}``'
         if clean_negative != settings.read(channel)['negative_prompt']:
             reply_adds += f'\nNegative Prompt: ``{clean_negative}``'
         if guidance_scale != settings.read(channel)['guidance_scale']:
@@ -689,6 +746,23 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
     def dream(self, event_loop: queuehandler.GlobalQueue.event_loop, queue_object: queuehandler.DrawObject):
         try:
             start_time = time.time()
+
+            status_message_task = event_loop.create_task(queue_object.ctx.channel.send(
+                f'**Author ID**: {queue_object.ctx.author.id} ({queue_object.ctx.author.name})\n'
+                f'**Prompt**: `{queue_object.prompt}`\n**Progress**: Initializing...'
+                f'\n0/{queue_object.steps} iterations, 0.00 iterations per second'
+                f'\n**Relative ETA**: Initializing...'))
+
+            def worker():
+                event_loop.create_task(update_progress(event_loop, status_message_task, s, queue_object, 0))
+                return
+
+            status_thread = threading.Thread(target=worker)
+
+            def start_thread(*args):
+                status_thread.start()
+
+            status_message_task.add_done_callback(start_thread)
 
             # construct a payload for data model, then the normal payload
             model_payload = {
@@ -821,6 +895,7 @@ class StableCog(commands.Cog, name='Stable Diffusion', description='Create image
                         view = None
 
                 # post to discord
+                event_loop.create_task(status_message_task.result().delete())   #Need to figure out how to supress delete errors
                 with io.BytesIO() as buffer:
                     image = Image.open(io.BytesIO(base64.b64decode(i)))
                     image.save(buffer, 'jpeg', pnginfo=metadata)

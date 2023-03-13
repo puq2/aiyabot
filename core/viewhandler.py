@@ -9,6 +9,8 @@ from core import queuehandler
 from core import settings
 from core import stablecog
 
+import requests
+
 '''
 The input_tuple index reference
 input_tuple[0] = ctx
@@ -292,6 +294,30 @@ class DrawModal(Modal):
                 await queuehandler.process_dream(draw_dream, queuehandler.DrawObject(stablecog.StableCog(self), *prompt_tuple, DrawView(prompt_tuple)))
             await interaction.response.send_message(f'<@{interaction.user.id}>, {settings.messages()}\nQueue: ``{len(queuehandler.GlobalQueue.queue)}``{prompt_output}')
 
+# view that holds the interrupt button for progress
+class ProgressView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        custom_id="button-interrupt",
+        emoji="❌"
+    )
+    async def interrupt(self, button, interaction):
+        try:
+            if str(interaction.user.id) not in interaction.message.content:
+                await interaction.response.send_message("Cannot interrupt other people's tasks!", ephemeral=True)
+                return
+            button.disabled = True
+            s = requests.Session()
+            s.post(url=f'{settings.global_var.url}/sdapi/v1/interrupt')
+            await interaction.message.delete()
+        except Exception as e:
+            button.disabled = True
+            await interaction.response.send_message("I have no idea why, but I broke. Either the request has fallen "
+                                                    "through "
+                                                    "or I no longer have the message in my cache.\n"
+                                                    f"Good luck:\n`{str(e)}`", ephemeral=True)
 
 # creating the view that holds the buttons for /draw output
 class DrawView(View):
